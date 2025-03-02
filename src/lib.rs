@@ -31,12 +31,13 @@ impl<'a> Display for MyPath<'a> {
 }
 
 pub(crate) fn expand_item_fn(mut item_fn: ItemFn) -> Result<proc_macro2::TokenStream> {
-    // eprintln!("item_fn's in check is {:#?}", item_fn);
+    eprintln!("item_fn's in check is {:#?}", item_fn);
     let block = item_fn.block.as_mut();
     let stmts = &mut block.stmts;
     for stmt in stmts {
         if let Stmt::Expr(Expr::Match(expr_match), _) = stmt {
             let arms = &expr_match.arms;
+
             let attrs = &expr_match.attrs;
             let mut sorted_flag = false;
             for attr in attrs {
@@ -53,17 +54,16 @@ pub(crate) fn expand_item_fn(mut item_fn: ItemFn) -> Result<proc_macro2::TokenSt
                 let slice = &mut arms.iter().collect::<Vec<_>>()[..];
 
                 for (index, arm) in arms.iter().enumerate() {
-                    eprintln!("arm is {:#?}", arm);
                     let (left, right) = slice.split_at_mut(index);
+
                     let compared_object = left.last();
                     if compared_object.is_none() {
-                        continue;
+                        continue; //??
                     }
 
                     for x in right {
-                        let (x_path, x_span) = get_ident(x).unwrap();
-                        let (compared_object_path, _) =
-                            get_ident(compared_object.unwrap()).unwrap();
+                        let (compared_object_path, _) = get_ident(compared_object.unwrap())?;
+                        let (x_path, x_span) = get_ident(x)?;
 
                         for (x_path_segment, compared_path_segment) in x_path
                             .segments
@@ -101,18 +101,18 @@ pub fn check(_: TokenStream, input: TokenStream) -> TokenStream {
     result.into()
 }
 
-fn get_ident(arm: &Arm) -> Option<(&syn::Path, Span)> {
+fn get_ident(arm: &Arm) -> syn::Result<(&syn::Path, Span)> {
     // fn get_ident(arm: &Arm) -> TokenStream {
     match &arm.pat {
         syn::Pat::Path(syn::ExprPath { path, .. })
         | syn::Pat::Struct(syn::PatStruct { path, .. })
         | syn::Pat::TupleStruct(syn::PatTupleStruct { path, .. }) => {
             let span = path.span();
-            eprintln!("path is {:#?}", path);
-            return Some((path, span));
+            return Ok((path, span));
         }
-        _ => {
-            return None;
+        other_pat => {
+            let span = other_pat.span();
+            return Err(syn::Error::new(span, "unsupported by #[sorted]"));
         }
     }
 }
