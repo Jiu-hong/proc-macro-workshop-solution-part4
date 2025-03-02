@@ -10,6 +10,7 @@ use syn::Expr;
 use syn::ExprMatch;
 use syn::spanned::Spanned;
 
+use syn::PatIdent;
 use syn::Stmt;
 
 use syn::{ItemFn, Result, visit_mut::VisitMut};
@@ -31,7 +32,6 @@ impl<'a> Display for MyPath<'a> {
 }
 
 pub(crate) fn expand_item_fn(mut item_fn: ItemFn) -> Result<proc_macro2::TokenStream> {
-    eprintln!("item_fn's in check is {:#?}", item_fn);
     let block = item_fn.block.as_mut();
     let stmts = &mut block.stmts;
     for stmt in stmts {
@@ -53,37 +53,31 @@ pub(crate) fn expand_item_fn(mut item_fn: ItemFn) -> Result<proc_macro2::TokenSt
                 let mut vistor = Visitor;
                 let slice = &mut arms.iter().collect::<Vec<_>>()[..];
 
-                for (index, arm) in arms.iter().enumerate() {
+                for (index, _) in arms.iter().enumerate() {
                     let (left, right) = slice.split_at_mut(index);
 
                     let compared_object = left.last();
                     if compared_object.is_none() {
-                        continue; //??
+                        continue;
                     }
 
                     for x in right {
-                        let (compared_object_path, _) = get_ident(compared_object.unwrap())?;
-                        let (x_path, x_span) = get_ident(x)?;
+                        let (compared_object_path_string, _span, compared_object_wild_value) =
+                            get_ident(compared_object.unwrap())?;
+                        let (x_path_string, x_span, _x_wild_value) = get_ident(x)?;
 
-                        for (x_path_segment, compared_path_segment) in x_path
-                            .segments
-                            .iter()
-                            .zip(compared_object_path.segments.iter())
+                        if compared_object_wild_value || x_path_string < compared_object_path_string
                         {
-                            if x_path_segment.ident < compared_path_segment.ident {
-                                let error = Err(syn::Error::new(
-                                    x_span,
-                                    // Span::call_site(),
-                                    format!(
-                                        "{} should sort before {}",
-                                        MyPath(x_path),
-                                        MyPath(compared_object_path)
-                                    ),
-                                ));
-                                vistor.visit_expr_match_mut(expr_match);
+                            let error = Err(syn::Error::new(
+                                x_span,
+                                format!(
+                                    "{} should sort before {}",
+                                    x_path_string, compared_object_path_string
+                                ),
+                            ));
+                            vistor.visit_expr_match_mut(expr_match);
 
-                                return error;
-                            }
+                            return error;
                         }
                     }
                 }
@@ -101,14 +95,27 @@ pub fn check(_: TokenStream, input: TokenStream) -> TokenStream {
     result.into()
 }
 
-fn get_ident(arm: &Arm) -> syn::Result<(&syn::Path, Span)> {
+fn get_ident(arm: &Arm) -> syn::Result<(String, Span, bool)> {
+    // the 3rd one is wild value flag
+    let mut wild_value = false;
     // fn get_ident(arm: &Arm) -> TokenStream {
     match &arm.pat {
         syn::Pat::Path(syn::ExprPath { path, .. })
         | syn::Pat::Struct(syn::PatStruct { path, .. })
         | syn::Pat::TupleStruct(syn::PatTupleStruct { path, .. }) => {
             let span = path.span();
-            return Ok((path, span));
+
+            return Ok((MyPath(path).to_string(), span, wild_value));
+        }
+        syn::Pat::Ident(PatIdent { ident, .. }) => {
+            let span = ident.span();
+
+            return Ok((ident.to_string(), span, wild_value));
+        }
+        syn::Pat::Wild(path_wild) => {
+            let span = path_wild.span();
+            wild_value = true;
+            return Ok(("_".to_string(), span, wild_value));
         }
         other_pat => {
             let span = other_pat.span();
