@@ -19,14 +19,14 @@ use syn::{Error, Item, parse_macro_input};
 struct MyPath<'a>(&'a syn::Path);
 impl<'a> Display for MyPath<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        let path = &self.0;
-        let a = &path.segments;
-        let vec = a
+        let vec = &self
+            .0
+            .segments
             .iter()
             .map(|path_segment| path_segment.ident.to_string())
             .collect::<Vec<_>>();
-        let a = vec[..].join(&String::from("::"));
-        write!(f, "{a}")
+        let path_string = vec[..].join(&String::from("::"));
+        write!(f, "{path_string}")
     }
 }
 
@@ -35,7 +35,6 @@ pub(crate) fn expand_item_fn(mut item_fn: ItemFn) -> Result<proc_macro2::TokenSt
     let block = item_fn.block.as_mut();
     let stmts = &mut block.stmts;
     for stmt in stmts {
-        // eprintln!("stmt is {:#?}", stmt);
         if let Stmt::Expr(Expr::Match(expr_match), _) = stmt {
             let arms = &expr_match.arms;
             let attrs = &expr_match.attrs;
@@ -100,9 +99,6 @@ pub fn check(_: TokenStream, input: TokenStream) -> TokenStream {
     let input_item = parse_macro_input!(input as ItemFn);
     let result = expand_item_fn(input_item).unwrap_or_else(Error::into_compile_error);
     result.into()
-
-    // let result = expand(input_item).unwrap_or_else(Error::into_compile_error);
-    // result.into()
 }
 
 fn get_ident(arm: &Arm) -> Option<(&syn::Path, Span)> {
@@ -115,7 +111,6 @@ fn get_ident(arm: &Arm) -> Option<(&syn::Path, Span)> {
             eprintln!("path is {:#?}", path);
             return Some((path, span));
         }
-
         _ => {
             return None;
         }
