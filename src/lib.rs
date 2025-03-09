@@ -5,17 +5,10 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::ToTokens;
 
-use syn::Arm;
-use syn::Expr;
-use syn::ExprMatch;
-use syn::spanned::Spanned;
-
-use syn::PatIdent;
-use syn::Stmt;
-
-use syn::{ItemFn, Result, visit_mut::VisitMut};
-
-use syn::{Error, Item, parse_macro_input};
+use syn::{
+    Arm, Error, Expr, ExprMatch, Item, ItemFn, PatIdent, Result, Stmt, parse_macro_input,
+    spanned::Spanned, visit_mut::VisitMut,
+};
 
 struct MyPath<'a>(&'a syn::Path);
 impl<'a> Display for MyPath<'a> {
@@ -31,68 +24,74 @@ impl<'a> Display for MyPath<'a> {
     }
 }
 
-pub(crate) fn expand_item_fn(mut item_fn: ItemFn) -> Result<proc_macro2::TokenStream> {
-    let block = item_fn.block.as_mut();
-    let stmts = &mut block.stmts;
-    for stmt in stmts {
-        if let Stmt::Expr(Expr::Match(expr_match), _) = stmt {
-            let arms = &expr_match.arms;
+pub(crate) fn expand_expr_match(expr_match: &ExprMatch) -> Result<proc_macro2::TokenStream> {
+    let arms = &expr_match.arms;
 
-            let attrs = &expr_match.attrs;
-            let mut sorted_flag = false;
-            for attr in attrs {
-                if let syn::Meta::Path(s) = &attr.meta {
-                    let a = s.get_ident().unwrap();
-                    if a == "sorted" {
-                        sorted_flag = true
-                    }
-                }
-            }
+    let slice = &mut arms.iter().collect::<Vec<_>>()[..];
 
-            if sorted_flag {
-                let mut vistor = Visitor;
-                let slice = &mut arms.iter().collect::<Vec<_>>()[..];
+    for (index, _) in arms.iter().enumerate() {
+        let (left, right) = slice.split_at_mut(index);
 
-                for (index, _) in arms.iter().enumerate() {
-                    let (left, right) = slice.split_at_mut(index);
+        let compared_object = left.last();
+        if compared_object.is_none() {
+            continue;
+        }
 
-                    let compared_object = left.last();
-                    if compared_object.is_none() {
-                        continue;
-                    }
+        for x in right {
+            let (compared_object_path_string, _span, compared_object_wild_value) =
+                get_ident(compared_object.unwrap())?;
+            let (x_path_string, x_span, _x_wild_value) = get_ident(x)?;
 
-                    for x in right {
-                        let (compared_object_path_string, _span, compared_object_wild_value) =
-                            get_ident(compared_object.unwrap())?;
-                        let (x_path_string, x_span, _x_wild_value) = get_ident(x)?;
+            if compared_object_wild_value || x_path_string < compared_object_path_string {
+                let error = Err(syn::Error::new(
+                    x_span,
+                    format!(
+                        "{} should sort before {}",
+                        x_path_string, compared_object_path_string
+                    ),
+                ));
 
-                        if compared_object_wild_value || x_path_string < compared_object_path_string
-                        {
-                            let error = Err(syn::Error::new(
-                                x_span,
-                                format!(
-                                    "{} should sort before {}",
-                                    x_path_string, compared_object_path_string
-                                ),
-                            ));
-                            vistor.visit_expr_match_mut(expr_match);
-
-                            return error;
-                        }
-                    }
-                }
-                vistor.visit_expr_match_mut(expr_match);
+                return error;
             }
         }
     }
-    return Ok(item_fn.to_token_stream());
+
+    return Ok(expr_match.to_token_stream());
 }
 
 #[proc_macro_attribute]
 pub fn check(_: TokenStream, input: TokenStream) -> TokenStream {
-    let input_item = parse_macro_input!(input as ItemFn);
-    let result = expand_item_fn(input_item).unwrap_or_else(Error::into_compile_error);
-    result.into()
+    let mut input_item = parse_macro_input!(input as ItemFn);
+
+    // first remove the attribute here .
+    let block = input_item.block.as_mut();
+    let stmts = &mut block.stmts;
+    for stmt in stmts {
+        // eprintln!("stmt is {:#?}", stmt);
+        if let Stmt::Expr(Expr::Match(expr_match), _) = stmt {
+            let attrs = &expr_match.clone().attrs;
+            for attr in attrs {
+                if let syn::Meta::Path(s) = &attr.meta {
+                    let a = s.get_ident().unwrap();
+                    if a == "sorted" {
+                        let mut vistor = Visitor;
+                        vistor.visit_expr_match_mut(expr_match);
+                        let pre_result = expand_expr_match(expr_match);
+                        if pre_result.is_err() {
+                            let error_token_stream = TokenStream::from(
+                                pre_result.unwrap_or_else(Error::into_compile_error),
+                            );
+                            return TokenStream::from_iter(vec![
+                                error_token_stream,
+                                input_item.into_token_stream().into(),
+                            ]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    input_item.into_token_stream().into()
 }
 
 fn get_ident(arm: &Arm) -> syn::Result<(String, Span, bool)> {
@@ -133,9 +132,17 @@ impl VisitMut for Visitor {
 
 #[proc_macro_attribute]
 pub fn sorted(_: TokenStream, input: TokenStream) -> TokenStream {
+    let input_clone = input.clone();
     let input_item = parse_macro_input!(input as Item);
-    let result = expand(input_item).unwrap_or_else(Error::into_compile_error);
-    result.into()
+    // eprintln!("input_item is {:#?}", input_item);
+    let pre_result = expand(input_item);
+    // let result = expand(input_item).unwrap_or_else(Error::into_compile_error);
+    if pre_result.is_err() {
+        let error_token_stream =
+            TokenStream::from(pre_result.unwrap_or_else(Error::into_compile_error));
+        return TokenStream::from_iter(vec![error_token_stream, input_clone]);
+    }
+    pre_result.unwrap().into()
 }
 
 pub(crate) fn expand(input_item: Item) -> Result<proc_macro2::TokenStream> {
